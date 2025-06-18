@@ -1,6 +1,7 @@
 package peerdiscovery
 
 import (
+	"context"
 	"net"
 	"sync"
 	"time"
@@ -81,11 +82,10 @@ func (p *PeerDiscovery) ActivePeers() (peers []*PeerState) {
 
 // Listen binds to the UDP address and port given and writes packets received
 // from that address to a buffer which is passed to a hander
-func (p *PeerDiscovery) listen(c net.PacketConn) (recievedBytes []byte, err error) {
+func (p *PeerDiscovery) listen(ctx context.Context, c net.PacketConn) (recievedBytes []byte, err error) {
 	p.RLock()
 	portNum := p.settings.portNum
 	allowSelf := p.settings.AllowSelf
-	timeLimit := p.settings.TimeLimit
 	notify := p.settings.Notify
 	p.RUnlock()
 	localIPs := getLocalIPs()
@@ -109,7 +109,6 @@ func (p *PeerDiscovery) listen(c net.PacketConn) (recievedBytes []byte, err erro
 		p2.JoinGroup(&ifaces[i], &net.UDPAddr{IP: group, Port: portNum})
 	}
 
-	start := time.Now()
 	// Loop forever reading from the socket
 	for {
 		buffer := make([]byte, maxDatagramSize)
@@ -158,7 +157,8 @@ func (p *PeerDiscovery) listen(c net.PacketConn) (recievedBytes []byte, err erro
 			p.RUnlock()
 			break
 		}
-		if p.exit || timeLimit > 0 && time.Since(start) > timeLimit {
+
+		if ctx.Err() != nil {
 			p.RUnlock()
 			break
 		}

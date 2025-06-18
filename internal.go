@@ -38,12 +38,6 @@ func initialize(settings Settings) (p *PeerDiscovery, err error) {
 	if p.settings.Delay == 0 {
 		p.settings.Delay = 1 * time.Second
 	}
-	if p.settings.TimeLimit == 0 {
-		p.settings.TimeLimit = 10 * time.Second
-	}
-	if p.settings.StopChan == nil {
-		p.settings.StopChan = make(chan struct{})
-	}
 	p.received = make(map[string]*PeerState)
 	p.settings.multicastAddressNumbers = net.ParseIP(p.settings.MulticastAddress)
 	if p.settings.multicastAddressNumbers == nil {

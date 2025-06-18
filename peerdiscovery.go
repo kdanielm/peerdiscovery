@@ -1,6 +1,7 @@
 package peerdiscovery
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -61,13 +62,6 @@ type Settings struct {
 	PayloadFunc func() []byte
 	// Delay is the amount of time between broadcasts. The default delay is 1 second.
 	Delay time.Duration
-	// TimeLimit is the amount of time to spend discovering, if the limit is not reached.
-	// A negative limit indiciates scanning until the limit was reached or, if an
-	// unlimited scanning was requested, no timeout.
-	// The default time limit is 10 seconds.
-	TimeLimit time.Duration
-	// StopChan is a channel to stop the peer discvoery immediatley after reception.
-	StopChan chan struct{}
 	// AllowSelf will allow discovery the local machine (default false)
 	AllowSelf bool
 	// DisableBroadcast will not allow sending out a broadcast
@@ -99,16 +93,16 @@ type NetPacketConn interface {
 // Discover will use the created settings to scan for LAN peers. It will return
 // an array of the discovered peers and their associate payloads. It will not
 // return broadcasts sent to itself.
-func Discover(settings ...Settings) (discoveries []Discovered, err error) {
-	_, discoveries, err = newPeerDiscovery(settings...)
+func Discover(ctx context.Context, settings ...Settings) (discoveries []Discovered, err error) {
+	_, discoveries, err = newPeerDiscovery(ctx, settings...)
 	if err != nil {
 		return nil, err
 	}
 	return discoveries, nil
 }
 
-func NewPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, err error) {
-	pd, discoveries, err := newPeerDiscovery(settings...)
+func NewPeerDiscovery(ctx context.Context, settings ...Settings) (pd *PeerDiscovery, err error) {
+	pd, discoveries, err := newPeerDiscovery(ctx, settings...)
 
 	if notify := pd.settings.Notify; notify != nil {
 		for _, d := range discoveries {
@@ -119,28 +113,34 @@ func NewPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, err error) {
 	return pd, err
 }
 
-func newPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, discoveries []Discovered, err error) {
+func newPeerDiscovery(ctx context.Context, settings ...Settings) (pd *PeerDiscovery, discoveries []Discovered, err error) {
 	s := Settings{}
+
 	if len(settings) > 0 {
 		s = settings[0]
 	}
+
 	p, err := initialize(s)
+
 	if err != nil {
 		return nil, nil, err
 	}
 
 	p.RLock()
+
 	address := net.JoinHostPort(p.settings.MulticastAddress, p.settings.Port)
 	portNum := p.settings.portNum
 
 	tickerDuration := p.settings.Delay
-	timeLimit := p.settings.TimeLimit
+
 	p.RUnlock()
 
 	ifaces, err := filterInterfaces(p.settings.IPVersion == IPv4)
+
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if len(ifaces) == 0 {
 		err = fmt.Errorf("no multicast interface found")
 		return nil, nil, err
@@ -148,15 +148,18 @@ func newPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, discoveries []Di
 
 	// Open up a connection
 	c, err := net.ListenPacket(fmt.Sprintf("udp%d", p.settings.IPVersion), address)
+
 	if err != nil {
 		return nil, nil, err
 	}
+
 	defer c.Close()
 
 	group := p.settings.multicastAddressNumbers
 
 	// ipv{4,6} have an own PacketConn, which does not implement net.PacketConn
 	var p2 NetPacketConn
+
 	if p.settings.IPVersion == IPv4 {
 		p2 = PacketConn4{ipv4.NewPacketConn(c)}
 	} else {
@@ -167,11 +170,11 @@ func newPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, discoveries []Di
 		p2.JoinGroup(&ifaces[i], &net.UDPAddr{IP: group, Port: portNum})
 	}
 
-	go p.listen(c)
+	go p.listen(ctx, c)
 	ticker := time.NewTicker(tickerDuration)
 	defer ticker.Stop()
-	start := time.Now()
 
+loop:
 	for {
 		p.RLock()
 		if len(p.received) >= p.settings.Limit && p.settings.Limit > 0 {
@@ -189,13 +192,9 @@ func newPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, discoveries []Di
 		}
 
 		select {
-		case <-p.settings.StopChan:
-			p.exit = true
+		case <-ctx.Done():
+			break loop
 		case <-ticker.C:
-		}
-
-		if p.exit || timeLimit > 0 && time.Since(start) > timeLimit {
-			break
 		}
 	}
 
@@ -211,7 +210,9 @@ func newPeerDiscovery(settings ...Settings) (pd *PeerDiscovery, discoveries []Di
 	p.RLock()
 
 	discoveries = make([]Discovered, len(p.received))
+
 	i := 0
+
 	for ip, peerState := range p.received {
 		discoveries[i] = Discovered{
 			Address:  ip,
