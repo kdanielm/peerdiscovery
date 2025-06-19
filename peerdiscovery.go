@@ -171,6 +171,9 @@ func newPeerDiscovery(ctx context.Context, settings ...Settings) (pd *PeerDiscov
 	}
 
 	go p.listen(ctx, c)
+
+	go p.gc(ctx)
+
 	ticker := time.NewTicker(tickerDuration)
 	defer ticker.Stop()
 
@@ -223,8 +226,6 @@ loop:
 	}
 
 	p.RUnlock()
-
-	go p.gc()
 
 	return p, discoveries, nil
 }

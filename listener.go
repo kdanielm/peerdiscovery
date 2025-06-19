@@ -34,27 +34,32 @@ type LostPeer struct {
 	Metadata    *Metadata
 }
 
-func (p *PeerDiscovery) gc() {
+func (p *PeerDiscovery) gc(ctx context.Context) {
 	ticker := time.NewTicker(p.settings.Delay * 2)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		p.Lock()
-		for ip, peerState := range p.received {
-			if time.Since(peerState.lastSeen) > p.settings.Delay*4 {
-				if p.settings.NotifyLost != nil {
-					p.settings.NotifyLost(LostPeer{
-						Address:     ip,
-						LastSeen:    peerState.lastSeen,
-						LastPayload: peerState.lastPayload,
-						Metadata:    peerState.metadata,
-					})
-				}
+	for {
+		select {
+		case <-ticker.C:
+			p.Lock()
+			for ip, peerState := range p.received {
+				if time.Since(peerState.lastSeen) > p.settings.Delay*4 {
+					if p.settings.NotifyLost != nil {
+						p.settings.NotifyLost(LostPeer{
+							Address:     ip,
+							LastSeen:    peerState.lastSeen,
+							LastPayload: peerState.lastPayload,
+							Metadata:    peerState.metadata,
+						})
+					}
 
-				delete(p.received, ip)
+					delete(p.received, ip)
+				}
 			}
+			p.Unlock()
+		case <-ctx.Done():
+			return
 		}
-		p.Unlock()
 	}
 }
 
